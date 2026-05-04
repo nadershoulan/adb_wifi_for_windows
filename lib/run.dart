@@ -1,6 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:adb_wifi/generate_qr_code.dart';
+import 'package:adb_wifi_plus/generate_qr_code.dart';
 import 'package:multicast_dns/multicast_dns.dart';
 import 'package:nanoid/nanoid.dart';
 
@@ -29,11 +30,37 @@ Future<void> run() async {
   final ipv4Address = await _lookupAddress(discovered.address);
   if (ipv4Address == null) return;
 
-  await _runAdbPair(
+  final pairOk = await _runAdbPair(
     address: ipv4Address,
     port: discovered.port,
     password: password,
   );
+
+  print('');
+  print('[adb_wifi_plus] Pair step finished (success=$pairOk).');
+  print('[adb_wifi_plus] Waiting for device to advertise the connect service '
+      '(_adb-tls-connect._tcp.local) ...');
+
+  final connectService = await _discoverConnect().timeout(
+    const Duration(seconds: 60),
+    onTimeout: () {
+      print(
+        '[adb_wifi_plus] Timed out waiting for the connect mDNS announcement.\n'
+        'Open your phone, go to Developer Options > Wireless debugging, and\n'
+        'note the "IP address & Port" shown there, then run:\n'
+        '   adb connect <ip>:<port>',
+      );
+      return (address: '', port: 0);
+    },
+  );
+
+  if (connectService.port == 0) return;
+
+  print('[adb_wifi_plus] Discovered connect endpoint '
+      '${connectService.address}:${connectService.port}');
+
+  final connectIp = await _lookupAddress(connectService.address) ?? ipv4Address;
+  await _runAdbConnect(address: connectIp, port: connectService.port);
 }
 
 void _showQrCode({required String name, required String password}) {
@@ -43,8 +70,14 @@ void _showQrCode({required String name, required String password}) {
 }
 
 Future<({String address, int port})> _discover() async {
-  const name = '_adb-tls-pairing._tcp.local';
+  return _discoverService('_adb-tls-pairing._tcp.local');
+}
 
+Future<({String address, int port})> _discoverConnect() async {
+  return _discoverService('_adb-tls-connect._tcp.local');
+}
+
+Future<({String address, int port})> _discoverService(String name) async {
   final client = MDnsClient(
     rawDatagramSocketFactory: (
       dynamic host,
@@ -125,7 +158,7 @@ Future<String?> _lookupAddress(String address) async {
   return ipv4Address;
 }
 
-Future<void> _runAdbPair({
+Future<bool> _runAdbPair({
   required String address,
   required int port,
   required String password,
@@ -133,6 +166,49 @@ Future<void> _runAdbPair({
   final process = await Process.start(
     'adb',
     ['pair', '$address:$port', password],
+    runInShell: Platform.isWindows,
+  );
+
+  // Tee stdout/stderr so the user sees the output AND we can detect success
+  // from the text (adb pair may exit with a non-zero code on some setups even
+  // when pairing actually succeeded). Buffer raw bytes and decode at the end
+  // with a tolerant decoder so partial multi-byte sequences don't throw.
+  final stdoutBytes = <int>[];
+  final stderrBytes = <int>[];
+
+  final stdoutDone = process.stdout.listen((data) {
+    stdout.add(data);
+    stdoutBytes.addAll(data);
+  }).asFuture<void>();
+
+  final stderrDone = process.stderr.listen((data) {
+    stderr.add(data);
+    stderrBytes.addAll(data);
+  }).asFuture<void>();
+
+  await Future.wait([stdoutDone, stderrDone]);
+  await process.exitCode;
+
+  String safeDecode(List<int> bytes) {
+    try {
+      return utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      return String.fromCharCodes(bytes);
+    }
+  }
+
+  final combined =
+      '${safeDecode(stdoutBytes)}\n${safeDecode(stderrBytes)}'.toLowerCase();
+  return combined.contains('successfully paired');
+}
+
+Future<void> _runAdbConnect({
+  required String address,
+  required int port,
+}) async {
+  final process = await Process.start(
+    'adb',
+    ['connect', '$address:$port'],
     runInShell: Platform.isWindows,
   );
 

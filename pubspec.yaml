@@ -1,7 +1,8 @@
-name: adb_wifi
-description: A cli for attaching adb over wifi using a qr-code displayed in the terminal.
-version: 1.0.6
-repository: https://github.com/jkoenig134/adb_wifi
+name: adb_wifi_plus
+description: A Windows-friendly CLI for attaching adb over Wi-Fi using a QR code, with automatic adb connect after pairing.
+version: 1.0.0
+repository: https://github.com/nadershoulan/adb_wifi_for_windows
+issue_tracker: https://github.com/nadershoulan/adb_wifi_for_windows/issues
 
 environment:
   sdk: ^3.4.1
@@ -15,4 +16,4 @@ dev_dependencies:
   very_good_analysis: ^6.0.0
 
 executables:
-  adb_wifi:
+  adb_wifi_plus: adb_wifi
