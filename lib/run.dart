@@ -6,6 +6,19 @@ import 'package:nanoid/nanoid.dart';
 
 /// Run the adb wifi pairing process.
 Future<void> run() async {
+  // On Windows the default console code page (cp850/cp1252) cannot render the
+  // unicode block characters used to draw the QR code, which results in a
+  // garbled output that cannot be scanned. Switch the active code page of the
+  // current console to UTF-8 (65001) before printing.
+  if (Platform.isWindows) {
+    try {
+      await Process.run('chcp', ['65001'], runInShell: true);
+      stdout.encoding = const SystemEncoding();
+    } catch (_) {
+      // Ignore – we tried our best to enable UTF-8 output.
+    }
+  }
+
   final name = 'ADB_WIFI_${nanoid()}';
   final password = nanoid();
 
@@ -48,7 +61,25 @@ Future<({String address, int port})> _discover() async {
     ),
   );
 
-  await client.start();
+  // On Windows, `socket.joinMulticast` fails (errno 10042) when the OS lists
+  // virtual / loopback / non multicast-capable adapters. Filter the interface
+  // list to only the real, multicast-capable IPv4 interfaces.
+  Future<Iterable<NetworkInterface>> interfacesFactory(
+    InternetAddressType type,
+  ) async {
+    final interfaces = await NetworkInterface.list(
+      includeLoopback: false,
+      includeLinkLocal: false,
+      type: type,
+    );
+    return interfaces.where(
+      (i) => i.addresses.any((a) => a.type == InternetAddressType.IPv4),
+    );
+  }
+
+  await client.start(
+    interfacesFactory: Platform.isWindows ? interfacesFactory : null,
+  );
 
   while (true) {
     final ptrs = client.lookup<PtrResourceRecord>(
@@ -102,6 +133,7 @@ Future<void> _runAdbPair({
   final process = await Process.start(
     'adb',
     ['pair', '$address:$port', password],
+    runInShell: Platform.isWindows,
   );
 
   await stdout.addStream(process.stdout);
